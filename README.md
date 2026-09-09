@@ -160,7 +160,7 @@ to convert float-formatted values correctly (`int(float(rs_raw))`).
 ## Running the pipeline
 
 ```bash
-git clone <this-repo>
+git clone https://github.com/faneesh89/project_3_pharmacogenomics.git
 cd project_3_pharmacogenomics
 
 # Default — uses data/clinvar.vcf.gz
