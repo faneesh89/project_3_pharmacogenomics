@@ -1,15 +1,11 @@
 # report_generator.py
-# Simple, clean HTML report for pharmacogenomics star allele results.
 
 import os
 from datetime import datetime
 
 
 def generate_html_report(alleles, output_filename="output/pgx_clinical_report.html"):
-    """
-    alleles: dict from call_alleles() — {gene: [list of allele dicts]}
-    Each allele dict has: 'allele', 'function', 'rs', 'note'
-    """
+
 
     # Build table rows
     rows_html = ""

@@ -65,7 +65,7 @@ PHENOTYPE_MAP = {
 
 
 # ------------------------------------------------------------
-# 3. RECOMMENDATION ENGINE (FULLY EXPANDED)
+# 3. RECOMMENDATION ENGINE 
 # ------------------------------------------------------------
 RECOMMENDATION_MAP = {
     'CYP2C19': {
