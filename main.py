@@ -10,6 +10,7 @@ from vcf_parser import read_vcf
 from variant_filter import filter_variants
 from gene_filter import filter_pharmacogenes
 from allele_caller import call_alleles
+from pgx_pipeline import build_patient_report
 from report_generator import generate_html_report
 
 
@@ -17,12 +18,12 @@ def main():
     parser = argparse.ArgumentParser(description="Pharmacogenomics Clinical Pipeline")
     parser.add_argument(
         "-i", "--input",
-        default="data/clinvar.vcf.gz",          
+        default="data/clinvar.vcf.gz",
         help="Path to input VCF file (default: data/clinvar.vcf.gz)"
     )
     parser.add_argument(
         "-o", "--output",
-        default="output/pgx_clinical_report.html",  # ← now inside output/
+        default="output/pgx_clinical_report.html",
         help="Output HTML report path (default: output/pgx_clinical_report.html)"
     )
     parser.add_argument("--min_qual",  type=float, default=20.0,
@@ -40,9 +41,8 @@ def main():
     print("STARTING PHARMACOGENOMICS PIPELINE")
     print("="*60)
 
-    # 2. Read and parse the VCF file
     try:
-        print(f"[1/4] Reading VCF file: {args.input} ...")
+        print(f"[1/5] Reading VCF file: {args.input} ...")
         all_variants = list(read_vcf(args.input))
         print(f"      Total variants parsed: {len(all_variants)}")
     except FileNotFoundError:
@@ -52,20 +52,26 @@ def main():
         print(f"Unexpected error while parsing VCF: {e}")
         sys.exit(1)
 
-    print(f"[2/4] Filtering by quality (QUAL >= {args.min_qual}, DP >= {args.min_depth})...")
+    print(f"[2/5] Filtering by quality (QUAL >= {args.min_qual}, DP >= {args.min_depth})...")
     passed_variants, rejected_stats = filter_variants(
         all_variants, min_qual=args.min_qual, min_depth=args.min_depth
     )
     print(f"      Passed QC: {len(passed_variants)}")
     print(f"      Failed QC: {len(rejected_stats)}")
 
-    print("[3/4] Filtering to known pharmacogenes (CYP2D6, CYP2C19, etc.)...")
+    print("[3/5] Filtering to known pharmacogenes (CYP2D6, CYP2C19, etc.)...")
     pgx_variants = filter_pharmacogenes(passed_variants)
     print(f"      Found {len(pgx_variants)} variants in pharmacogenes")
 
-
-    print("[4/4] Calling star alleles and generating HTML report...")
+    print("[4/5] Calling star alleles...")
     alleles = call_alleles(pgx_variants)
+
+    print("[5/5] Predicting phenotypes and drug recommendations...")
+    for gene, allele_list in alleles.items():
+        row = build_patient_report(gene, allele_list)
+        print(f"  {row['gene']:<8} {row['diplotype']:<14} {row['phenotype']}")
+        print(f"           {row['recommendation']}")
+
     generate_html_report(alleles, args.output)
 
     print("="*60)
@@ -76,3 +82,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
