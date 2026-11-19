@@ -362,7 +362,7 @@ def resolve_tpmt_alleles(tpmt_alleles):
 
     resolved = []
     for a in tpmt_alleles:
-        if a['allele'] == '3A_part1':
+        if a['allele'] == '*3A_part1':
             if has_part2:
                 resolved.append({**a, 'allele': '*3A', 'function': 'no_function',
                                   'note': '*3A confirmed (both rs1800460 + rs1142345 present)'})\

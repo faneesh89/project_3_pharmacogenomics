@@ -1,21 +1,47 @@
 # pgx_pipeline.py
+#
+# Turns called star alleles into patient-level answers:
 
 from allele_caller import ACTIVITY_SCORES
+
 # ------------------------------------------------------------
-# 1. DIPLOTYPE BUILDER
+# DIPLOTYPE BUILDER
 # ------------------------------------------------------------
+
+def _allele_sort_key(allele_name):
+    """Canonical order key: by the allele number ('*2' -> 2,
+    '*17' -> 17); alleles without a leading number sort last."""
+    digits = ''
+    for ch in allele_name:
+        if ch.isdigit():
+            digits += ch
+        else:
+            break
+    if digits:
+        return (int(digits), allele_name)
+    return (9999, allele_name)
+
 
 def build_diplotype(allele_list):
-    if len(allele_list) == 2:
-        return "/".join(allele_list)
-    elif len(allele_list) == 1:
-        return f"*1/{allele_list[0]}"
-    else:
-        return "*1/*1"
+    """Build a diplotype string from called alleles, in canonical
+    order, so '*3/*2' and '*2/*3' are the same string.
+
+    A diplotype needs exactly two alleles: one called allele means the
+    other chromosome carries the reference *1, zero called alleles
+    means *1/*1. More than two called alleles cannot be resolved into
+    a diplotype without phasing, so they are all joined and the
+    phenotype lookup will report Unknown."""
+    alleles = list(allele_list)
+    if not alleles:
+        return '*1/*1'
+    if len(alleles) == 1:
+        alleles.append('*1')
+    return '/'.join(sorted(alleles, key=_allele_sort_key))
+
 
 # -------------------------------------
-# PHENOTYPE PRDICTOR
-#--------------------------------------
+# PHENOTYPE PREDICTOR
+# --------------------------------------
 
 PHENOTYPE_MAP = {
     'CYP2C19': {
@@ -64,9 +90,47 @@ PHENOTYPE_MAP = {
 }
 
 
-# ------------------------------------------------------------
-# 3. RECOMMENDATION ENGINE 
-# ------------------------------------------------------------
+def predict_phenotype(gene, allele_info_list):
+    """Predict phenotype for one gene from its called alleles.
+
+    DPYD uses the CPIC activity-score system: each called allele
+    contributes its function score, missing copies are *1 (score 1.0),
+    and the total maps to Normal / Intermediate / Poor. Every other
+    gene uses a direct diplotype lookup."""
+    n_called = len(allele_info_list)
+
+    if gene == 'DPYD':
+        if n_called == 0:
+            total_score = 2.0
+        elif n_called <= 2:
+            total_score = 0.0
+            for allele_info in allele_info_list:
+                function = allele_info.get('function', 'normal')
+                total_score += ACTIVITY_SCORES.get(function, 0.0)
+            total_score += (2 - n_called) * 1.0
+        else:
+            return 'Unknown Phenotype'
+
+        if total_score >= 2.0:
+            return 'Normal Metabolizer'
+        elif total_score >= 1.0:
+            return 'Intermediate Metabolizer'
+        else:
+            return 'Poor Metabolizer'
+
+    allele_names = [a['allele'] for a in allele_info_list]
+    diplotype = build_diplotype(allele_names)
+
+    if gene in PHENOTYPE_MAP and diplotype in PHENOTYPE_MAP[gene]:
+        return PHENOTYPE_MAP[gene][diplotype]
+
+    return "Unknown Phenotype"
+
+
+# -----------------------------
+# RECOMMENDATION ENGINE
+# -----------------------------
+
 RECOMMENDATION_MAP = {
     'CYP2C19': {
         'Poor Metabolizer': '⚠️ AVOID Clopidogrel. Use Prasugrel or Ticagrelor.',
@@ -102,57 +166,12 @@ RECOMMENDATION_MAP = {
     }
 }
 
-# pgx_pipeline.py
-
-from allele_caller import ACTIVITY_SCORES
-
-# ... other functions (build_diplotype, get_recommendation, etc.)
-
-def predict_phenotype(gene, allele_info_list):
-    """
-    Predict phenotype for a given gene and list of allele dictionaries.
-    
-    Args:
-        gene: Gene name (e.g., 'CYP2C19', 'DPYD')
-        allele_info_list: List of dictionaries with 'allele' and 'function' keys.
-    
-    Returns:
-        Phenotype string (e.g., 'Normal Metabolizer', 'Intermediate Metabolizer')
-    """
-    # ---- SPECIAL CASE: DPYD (Activity Score System) ----
-    if gene == 'DPYD':
-        total_score = 0.0
-        for allele_info in allele_info_list:
-            function = allele_info.get('function', 'normal')
-            score = ACTIVITY_SCORES.get(function, 0.0)
-            total_score += score
-        
-        if total_score >= 2.0:
-            return 'Normal Metabolizer'
-        elif total_score >= 1.0:
-            return 'Intermediate Metabolizer'
-        else:
-            return 'Poor Metabolizer'
-    
-    # ---- REGULAR CASE: Diplotype Lookup ----
-    allele_names = [a['allele'] for a in allele_info_list]
-    diplotype = build_diplotype(allele_names)
-    
-    if gene in PHENOTYPE_MAP and diplotype in PHENOTYPE_MAP[gene]:
-        return PHENOTYPE_MAP[gene][diplotype]
-    
-    return "Unknown Phenotype"
-
-
-
-#-----------------------------
-# RECOMMENDATION ENGINE 
-#-----------------------------
 
 def get_recommendation(gene, phenotype):
     if gene in RECOMMENDATION_MAP and phenotype in RECOMMENDATION_MAP[gene]:
         return RECOMMENDATION_MAP[gene][phenotype]
     return "No specific recommendation."
+
 
 # --------------------
 # PATIENT REPORT
