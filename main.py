@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Project 3: Pharmacogenomics Pipeline - Main Entry Point
+Project 3: Pharmacogenomics Pipeline 
 """
 import argparse
 import os
@@ -10,7 +10,7 @@ from vcf_parser import read_vcf
 from variant_filter import filter_variants
 from gene_filter import filter_pharmacogenes
 from allele_caller import call_alleles
-from pgx_pipeline import build_patient_report
+from pgx_pipeline import build_patient_report, build_warfarin_report
 from report_generator import generate_html_report
 
 
@@ -30,7 +30,13 @@ def main():
                         help="Minimum QUAL score (default: 20.0)")
     parser.add_argument("--min_depth", type=int,   default=10,
                         help="Minimum read depth DP (default: 10)")
-
+    parser.add_argument('--age', type=int, default=None, help='Patient age in years')
+    parser.add_argument('--height', type=float, default=None, help='Height in cm')
+    parser.add_argument('--weight', type=float, default=None, help='Weight in kg')
+    parser.add_argument('--amiodarone', action='store_true', help='Taking amiodarone')
+    parser.add_argument('--smoker', action='store_true', help='Current smoker')
+    parser.add_argument('--debug-alleles', action='store_true',
+                    help='Print raw allele records for inspection')
     args = parser.parse_args()
 
     out_dir = os.path.dirname(args.output)
@@ -65,12 +71,38 @@ def main():
 
     print("[4/5] Calling star alleles...")
     alleles = call_alleles(pgx_variants)
+    if args.debug_alleles:
+        print("\n--- DEBUG: raw allele records ---")
+        for gene in ('VKORC1', 'CYP4F2', 'CYP2C19'):
+            for record in alleles.get(gene, []):
+                print(f"{gene:<8} {record}")
+        print("--- end debug ---\n")
 
     print("[5/5] Predicting phenotypes and drug recommendations...")
+    report_rows = []                                  # NEW: keep the rows
     for gene, allele_list in alleles.items():
         row = build_patient_report(gene, allele_list)
+        report_rows.append(row)                       # NEW: collect instead of discard
         print(f"  {row['gene']:<8} {row['diplotype']:<14} {row['phenotype']}")
         print(f"           {row['recommendation']}")
+
+# clinical envelope — unused today, ready for the IWPC dose estimate later
+    clinical = {
+        'age':        args.age,
+        'height_cm':  args.height,
+        'weight_kg':  args.weight,
+        'amiodarone': args.amiodarone,
+        'smoker':     args.smoker,
+}
+
+    warfarin = build_warfarin_report(alleles, report_rows)
+    if warfarin:
+        print("\n  WARFARIN COMBINED RECOMMENDATION")
+        print("  " + "-" * 40)
+        for gene_name, factor in warfarin['factors'].items():
+            print(f"  {gene_name:<8} x{factor}")
+        print(f"  Net dose factor: x{warfarin['net_factor']}")
+        print(f"  {warfarin['verdict']}")
 
     generate_html_report(alleles, args.output)
 
