@@ -119,6 +119,15 @@ def predict_phenotype(gene, allele_info_list):
             return 'Poor Metabolizer'
 
     allele_names = [a['allele'] for a in allele_info_list]
+    if gene == 'VKORC1':
+            functions = {a.get('function', 'normal') for a in allele_info_list}
+            if 'sensitive' in functions and 'resistant' in functions:
+                return 'Intermediate'
+            if 'sensitive' in functions:
+                return 'Sensitive'
+            if 'resistant' in functions:
+                return 'Resistant'
+            return 'Normal'
     diplotype = build_diplotype(allele_names)
 
     if gene in PHENOTYPE_MAP and diplotype in PHENOTYPE_MAP[gene]:
@@ -177,14 +186,123 @@ def get_recommendation(gene, phenotype):
 # PATIENT REPORT
 # --------------------
 
+VKORC1_VARIANT_LABELS = {
+    'sensitive': '-1639A (sensitive: lower dose)',
+    'resistant': 'D36Y (resistant: higher dose)',
+}
+
+
+def vkorc1_report_line(allele_info_list):
+    """Name the actual VKORC1 variants carried, with their dose
+    direction, so the step-5 line explains itself instead of
+    saying 'No specific recommendation'."""
+    parts = [VKORC1_VARIANT_LABELS[a.get('function')]
+             for a in allele_info_list
+             if a.get('function') in VKORC1_VARIANT_LABELS]
+    if not parts:
+        return 'No VKORC1 sensitivity/resistance variants called.'
+    return 'Warfarin: carries ' + ' + '.join(parts) + '.'
+
+
+
 def build_patient_report(gene, allele_info_list):
     diplotype = build_diplotype([a['allele'] for a in allele_info_list])
     phenotype = predict_phenotype(gene, allele_info_list)
     recommendation = get_recommendation(gene, phenotype)
+    if gene == 'VKORC1':
+        recommendation = vkorc1_report_line(allele_info_list)
     return {
         'gene': gene,
         'alleles_found': [a['allele'] for a in allele_info_list],
         'diplotype': diplotype,
         'phenotype': phenotype,
         'recommendation': recommendation
+    }
+
+# --------------------
+# WARFARIN MODULE
+# --------------------
+# Warfarin dosing is a product of three forces: CYP2C9 clearance,
+# VKORC1 target sensitivity and CYP4F2 vitamin K metabolism.
+# Each gene contributes a multiplicative factor to the standard dose.
+
+WARFARIN_DOSE_FACTORS = {
+    'CYP2C9': {
+        'Normal Metabolizer': 1.0,
+        'Intermediate Metabolizer': 0.7,
+        'Poor Metabolizer': 0.4,
+    },
+    'VKORC1': {
+        'sensitive': 0.6,   # -1639 A allele: lower VKORC1 expression
+        'resistant': 1.3,   # resistance variant: more drug needed
+        'normal': 1.0,
+    },
+    'CYP4F2': {
+        'carrier': 1.1,     # *3: slower vitamin K metabolism
+        'normal': 1.0,
+    },
+}
+
+
+def vkorc1_combined_factor(vkorc1_alleles):
+    """Multiply the dose factor of every called VKORC1 variant.
+
+    Replaces the old 'sensitive wins' rule, which dropped one
+    variant from the report. Each called variant now contributes
+    its own factor:
+        -1639A (sensitive) x0.6, D36Y (resistant) x1.3
+        both together -> 0.6 * 1.3 = 0.78
+    Limitation: treats variants as independent effects and does
+    not phase haplotypes — research estimate only.
+    """
+    factor = 1.0
+    for allele in vkorc1_alleles:
+        status = allele.get('function', 'normal')
+        factor *= WARFARIN_DOSE_FACTORS['VKORC1'].get(status, 1.0)
+    return round(factor, 3)
+
+
+def resolve_cyp4f2_status(allele_info_list):
+    """CYP4F2*3 carriers need a higher warfarin dose."""
+    if any(a['function'] == 'decreased' for a in allele_info_list):
+        return 'carrier'
+    return 'normal'
+
+
+def build_warfarin_report(alleles, patient_rows):
+    """Combine CYP2C9, VKORC1 and CYP4F2 into one warfarin dose
+    recommendation. Returns None if CYP2C9 has no phenotype."""
+    phenotypes = {row['gene']: row['phenotype'] for row in patient_rows}
+    cyp2c9_phenotype = phenotypes.get('CYP2C9')
+
+    if cyp2c9_phenotype not in WARFARIN_DOSE_FACTORS['CYP2C9']:
+        return None
+
+    factors = {
+        'CYP2C9': WARFARIN_DOSE_FACTORS['CYP2C9'][cyp2c9_phenotype],
+        'VKORC1': vkorc1_combined_factor(alleles.get('VKORC1', [])),
+        'CYP4F2': WARFARIN_DOSE_FACTORS['CYP4F2'][
+            resolve_cyp4f2_status(alleles.get('CYP4F2', []))],
+    }
+
+    net = 1.0
+    for factor in factors.values():
+        net *= factor
+
+    if net <= 0.35:
+        verdict = 'Very low dose expected - high bleeding risk, extended INR monitoring'
+    elif net <= 0.70:
+        verdict = 'Substantially reduced dose from standard, close INR monitoring'
+    elif net <= 0.95:
+        verdict = 'Slightly reduced dose, routine INR monitoring'
+    elif net <= 1.15:
+        verdict = 'Standard dose expected'
+    else:
+        verdict = 'Higher dose than standard likely needed, watch for under-anticoagulation'
+
+    return {
+        'cyp2c9_phenotype': cyp2c9_phenotype,
+        'factors': factors,
+        'net_factor': round(net, 2),
+        'verdict': verdict + ' [genotype-based dose modifiers - research estimate, not medical advice]',
     }
