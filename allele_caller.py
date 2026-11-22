@@ -1,5 +1,5 @@
 # allele_database.py
-
+import sys
 ALLELE_DEFINITIONS = {
 
     # ═══════════════════════════════════════════════════════════════════
@@ -265,71 +265,61 @@ def get_rs_number(variant):
     return None
 
 def call_allele_for_variant(variant):
-    """
-    Takes ONE variant dict (already tagged with 'GENE' from gene_filter.py)
-    Returns allele info dict if this variant matches a known star allele,
-    otherwise returns None.
- 
-    Matching strategy:
-    1. Primary: match by RS NUMBER (stable, build-independent)
-    2. The ALT allele in the VCF must match our expected variant base
- 
-    Returns dict like:
-    {
-        'allele': '*4',
-        'function': 'no_function',
-        'rs': 'rs3892097',
-        'note': '...'
-    }
-    or None if not a recognized allele-defining variant.
-    """
+    """Match one VCF variant to a known PGx allele by rsID.
 
+    Identity comes ONLY from the file's own RS= field, matched against the
+    entry keys. ref/alt is never used for matching: the entry letters mix
+    transcript and genomic orientation (rs1142345 says A/C, the file says
+    T/C; rs1800584 says A, the file says T), so an ALT gate silently
+    rejects true matches on minus-strand genes.
+    """
     gene = variant.get('GENE')
     if not gene or gene not in ALLELE_DEFINITIONS:
         return None
 
     rs = get_rs_number(variant)
-    if not rs : 
+    if not rs:
         return None
 
-    gene_defs = ALLELE_DEFINITIONS[gene]
-    if rs not in gene_defs:
+    definitions = ALLELE_DEFINITIONS[gene].get(rs)
+    if definitions is None:
         return None
 
-    definitions = gene_defs[rs]
-
-    vcf_alt = variant.get('ALT','')
-    expected_alt = definitions.get('alt','')
-
-    if expected_alt == 'del':
-        ref = variant.get('REF','')
-        if len(vcf_alt) >= len(ref):
-            return None
-
-    elif expected_alt not in ('',None) and vcf_alt != expected_alt:
-        return None
-
-    return{
-        'allele' : definitions['allele'],
+    return {
+        'allele': definitions['allele'],
         'function': definitions['function'],
-        'rs' : rs,
-        'note' : definitions['note']
+        'rs': rs,
+        'note': definitions['note'],
     }
 
 
 def call_alleles_for_all_variants(pgx_variants):
 
     results = {}
-
     for gene in ALLELE_DEFINITIONS.keys():
         results[gene] = []
+
+    identified = 0
+    sample_variant = None
 
     for variant in pgx_variants:
         allele_info = call_allele_for_variant(variant)
         if allele_info:
-            gene = variant.get('GENE')          
+            identified += 1
+            gene = variant.get('GENE')
             if gene in results:
                 results[gene].append(allele_info)
+        elif sample_variant is None:
+            sample_variant = variant
+
+    if pgx_variants and identified == 0:
+        sys.exit(
+            "HARD STOP: not a single variant could be identified by rsID.\n"
+            "Sample variant dict keys: " + str(list(sample_variant.keys())) + "\n"
+            "The parser is not exposing RS/info_dict. Do not trust any output "
+            "until matching is fixed. Paste this message back."
+        )
+
     return results
 
 def summarize_allele_results(allele_results):
@@ -343,12 +333,10 @@ def summarize_allele_results(allele_results):
                 'note': 'No known tag variants found — assuming *1 (reference)'
             }
         else:
-            allele_names = [a['allele'] for a in alleles]
-            functions = [a['function'] for a in alleles]
-        summary[gene] = {
-                'alleles_found': allele_names,
+            summary[gene] = {
+                'alleles_found': [a['allele'] for a in alleles],
                 'count': len(alleles),
-                'functions': functions,
+                'functions': [a['function'] for a in alleles],
                 'note': f"Found {len(alleles)} known variant(s)"
             }
     return summary
